@@ -6,7 +6,8 @@ import requests
 import os
 from datetime import datetime
 
-# Local DB paths\NINGREDIENTS_FILE = "ingredients_db.json"
+# Local DB paths
+INGREDIENTS_FILE = "ingredients_db.json"
 RECIPES_FILE = "recipes_db.json"
 
 # Initialize files if they don't exist
@@ -26,10 +27,14 @@ def save_json(file, data):
     with open(file, "w") as f:
         json.dump(data, f, indent=2)
 
+# 🔄 Ensure DB files exist before loading
 init_db()
+
+# 🔽 Load data from JSON
 ingredients = load_json(INGREDIENTS_FILE)
 recipes = load_json(RECIPES_FILE)
 
+# 🌐 Streamlit UI
 st.title("🍲 Meal Cost & Nutrition Analyzer")
 st.write("Track cost and nutrition of meals using Costco (Winnipeg) prices")
 
