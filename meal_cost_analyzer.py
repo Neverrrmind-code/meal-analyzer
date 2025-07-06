@@ -82,8 +82,8 @@ if selected_recipe:
     total_carb = 0.0
 
     for ingr, qty in recipe_data["ingredients"].items():
-        if ingr not in ingredients:
-            # Auto-fetch from USDA if missing
+        if ingr not in ingredients or not all(k in ingredients[ingr] for k in ["unit", "weight_per_unit"]):
+            # Auto-fetch from USDA if missing or incomplete
             usda = search_usda(ingr)
             ingredients[ingr] = {
                 "price": 0.0,
@@ -99,16 +99,17 @@ if selected_recipe:
             save_json(INGREDIENTS_FILE, ingredients)
 
         i = ingredients[ingr]
-        unit_weight = i["weight_per_unit"] if i["unit"] != "g" else 1
+        unit = i.get("unit", "g")
+        unit_weight = i.get("weight_per_unit", 1) if unit != "g" else 1
         qty_in_grams = qty * unit_weight
-        price_per_g = i["price"] / (i["weight"] * unit_weight if i["unit"] != "g" else i["weight"] or 1)
+        price_per_g = i.get("price", 0.0) / (i.get("weight", 1) * unit_weight if unit != "g" else i.get("weight", 1))
         total_cost += price_per_g * qty_in_grams
-        total_cals += (i["calories"] / 100) * qty_in_grams
-        total_prot += (i["protein"] / 100) * qty_in_grams
-        total_fat += (i["fat"] / 100) * qty_in_grams
-        total_carb += (i["carbs"] / 100) * qty_in_grams
+        total_cals += (i.get("calories", 0) / 100) * qty_in_grams
+        total_prot += (i.get("protein", 0) / 100) * qty_in_grams
+        total_fat += (i.get("fat", 0) / 100) * qty_in_grams
+        total_carb += (i.get("carbs", 0) / 100) * qty_in_grams
 
-        st.write(f"{ingr}: {qty} {i['unit']} — CAD {price_per_g * qty_in_grams:.2f}, {i['calories']} kcal/100g")
+        st.write(f"{ingr}: {qty} {unit} — CAD {price_per_g * qty_in_grams:.2f}, {i.get('calories', 0)} kcal/100g")
 
     st.subheader("📊 Analysis — per serving")
     st.write(f"**Cost:** CAD {total_cost/servings:.2f}")
