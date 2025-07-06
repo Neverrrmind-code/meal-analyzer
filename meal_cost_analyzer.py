@@ -57,6 +57,10 @@ if selected_recipe:
     ingr_table = []
     total_cost = total_cals = total_prot = total_fat = total_carb = 0.0
 
+        if "instructions" in rec and rec["instructions"]:
+        st.subheader("📖 Інструкція приготування")
+        st.write(rec["instructions"])
+
     for ingr, qty in rec["ingredients"].items():
         # unit
         unit = rec.get("units", {}).get(ingr, "g")

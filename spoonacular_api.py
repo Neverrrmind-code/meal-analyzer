@@ -1,7 +1,7 @@
 import requests
 
 def get_recipe(api_key, query):
-    # Спочатку шукаємо рецепти
+    # Пошук рецепта
     search_url = "https://api.spoonacular.com/recipes/complexSearch"
     params = {
         "apiKey": api_key,
@@ -15,12 +15,13 @@ def get_recipe(api_key, query):
         return None
     recipe_id = data["results"][0]["id"]
 
-    # Другий запит - отримати повну інформацію
+    # Отримати всю інформацію
     info_url = f"https://api.spoonacular.com/recipes/{recipe_id}/information"
     params_info = {"apiKey": api_key}
     res_info = requests.get(info_url, params=params_info)
     res_info.raise_for_status()
     recipe = res_info.json()
+
     # Структуруємо інгредієнти
     ingredients = {}
     for ingr in recipe["extendedIngredients"]:
@@ -28,8 +29,19 @@ def get_recipe(api_key, query):
         amount = ingr["measures"]["metric"]["amount"]
         unit = ingr["measures"]["metric"]["unitShort"] or "g"
         ingredients[name.title()] = {"qty": amount, "unit": unit}
+    
+    # Інструкція (є і як простий текст, і як кроки)
+    instructions_text = recipe.get("instructions") or ""
+    steps = []
+    for analyzed in recipe.get("analyzedInstructions", []):
+        for step in analyzed.get("steps", []):
+            steps.append(step["step"])
+    # Якщо є кроки — формуємо список, інакше — простий текст
+    full_instructions = "\n".join(steps) if steps else instructions_text
+
     return {
         "title": recipe["title"],
         "ingredients": ingredients,
-        "servings": recipe["servings"]
+        "servings": recipe["servings"],
+        "instructions": full_instructions
     }
