@@ -30,13 +30,12 @@ def get_recipe(api_key, query):
         unit = ingr["measures"]["metric"]["unitShort"] or "g"
         ingredients[name.title()] = {"qty": amount, "unit": unit}
     
-    # Інструкція (є і як простий текст, і як кроки)
+    # Інструкція (як текст і як кроки)
     instructions_text = recipe.get("instructions") or ""
     steps = []
     for analyzed in recipe.get("analyzedInstructions", []):
         for step in analyzed.get("steps", []):
             steps.append(step["step"])
-    # Якщо є кроки — формуємо список, інакше — простий текст
     full_instructions = "\n".join(steps) if steps else instructions_text
 
     return {

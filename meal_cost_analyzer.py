@@ -4,7 +4,11 @@ import os
 from datetime import datetime
 from spoonacular_api import get_recipe
 
-SPOONACULAR_KEY = st.secrets["spoonacular_key"]
+SPOONACULAR_KEY = st.secrets.get("spoonacular_key")
+if not SPOONACULAR_KEY:
+    st.error("Spoonacular API key not found! Set 'spoonacular_key' in .streamlit/secrets.toml or Streamlit Cloud Secrets.")
+    st.stop()
+
 INGREDIENTS_FILE = "ingredients_db.json"
 RECIPES_FILE = "recipes_db.json"
 
@@ -29,7 +33,7 @@ ingredients = load_json(INGREDIENTS_FILE)
 recipes = load_json(RECIPES_FILE)
 
 st.title("🍲 Meal Cost & Nutrition Analyzer (Spoonacular)")
-st.write("Шукай рецепти онлайн, підтягуй інгредієнти й оцінюй їхню ціну та поживність!")
+st.write("Шукай рецепти онлайн, підтягуй інгредієнти й інструкцію, оцінюй ціну та поживність!")
 
 # --- 1. Імпорт рецепту зі Spoonacular
 st.header("1. 📥 Імпорт рецепту з публічної бази")
@@ -41,7 +45,8 @@ if st.button("Знайти та імпортувати рецепт") and query:
         recipes[rec["title"]] = {
             "ingredients": {k: v["qty"] for k,v in rec["ingredients"].items()},
             "units": {k: v["unit"] for k,v in rec["ingredients"].items()},
-            "servings": rec["servings"]
+            "servings": rec["servings"],
+            "instructions": rec["instructions"]
         }
         save_json(RECIPES_FILE, recipes)
         st.success(f"Рецепт '{rec['title']}' додано!")
@@ -57,29 +62,21 @@ if selected_recipe:
     ingr_table = []
     total_cost = total_cals = total_prot = total_fat = total_carb = 0.0
 
-        if "instructions" in rec and rec["instructions"]:
-        st.subheader("📖 Інструкція приготування")
-        st.write(rec["instructions"])
-
     for ingr, qty in rec["ingredients"].items():
         # unit
         unit = rec.get("units", {}).get(ingr, "g")
-        # Check if in local ingredient DB
-        if ingr not in ingredients:
-            price = st.number_input(f"Ціна {ingr} ({unit}, за пакування):", min_value=0.0, key=f"price_{ingr}")
-            weight = st.number_input(f"Вага пакування {ingr} ({unit}):", min_value=1.0, key=f"weight_{ingr}")
-            # Додаємо пусті нутрієнти для майбутнього автоматичного/ручного заповнення
-            ingredients[ingr] = {
-                "price": price, "weight": weight,
-                "unit": unit, "weight_per_unit": 1,
-                "calories": 0, "protein": 0, "fat": 0, "carbs": 0,
-                "updated": str(datetime.now())
-            }
-            save_json(INGREDIENTS_FILE, ingredients)
-        else:
-            price = ingredients[ingr]["price"]
-            weight = ingredients[ingr]["weight"]
-
+        ingr_data = ingredients.get(ingr, {})
+        price = ingr_data.get("price", 0)
+        weight = ingr_data.get("weight", 0)
+        # Якщо ціна чи вага не вказані — показати поля для вводу
+        if not price or not weight:
+            st.warning(f"Вкажіть ціну та вагу для {ingr}")
+            price = st.number_input(f"Ціна {ingr} ({unit}, за упаковку):", min_value=0.0, key=f"pr_{ingr}")
+            weight = st.number_input(f"Вага {ingr} ({unit}):", min_value=1.0, key=f"wt_{ingr}")
+            if st.button(f"Зберегти {ingr}", key=f"save_{ingr}"):
+                ingredients[ingr] = {**ingr_data, "price": price, "weight": weight, "unit": unit}
+                save_json(INGREDIENTS_FILE, ingredients)
+                st.experimental_rerun()
         price_per_g = price / weight if weight else 0
         cost = price_per_g * qty
         total_cost += cost
@@ -88,6 +85,10 @@ if selected_recipe:
     st.subheader("Інгредієнти та вартість (без нутрієнтів):")
     st.write("\n".join(ingr_table))
     st.write(f"Вартість однієї порції: **CAD {total_cost/servings:.2f}**")
+    # Показати інструкцію
+    if "instructions" in rec and rec["instructions"]:
+        st.subheader("📖 Інструкція приготування")
+        st.write(rec["instructions"])
 
 # --- 3. Редагування інгредієнтів, нутрієнти
 with st.expander("⚙️ Додати/Редагувати інгредієнти та нутрієнти"):
@@ -113,6 +114,3 @@ with st.expander("⚙️ Додати/Редагувати інгредієнт�
                 "carbs": carbs,
                 "updated": str(datetime.now())
             }
-            save_json(INGREDIENTS_FILE, ingredients)
-            st.success(f"Saved: {name}")
-
