@@ -235,4 +235,31 @@ with st.expander("⚙️ Додати/Редагувати інгредієнт�
     if name:
         price = st.number_input("Price (CAD)", min_value=0.0)
         weight = st.number_input("Weight (in unit)", min_value=1.0)
-        unit = st.selectbox("Unit", ["g"]()
+        unit = st.selectbox("Unit", ["g", "ml", "pcs", "tbsp", "slice"])
+        weight_per_unit = st.number_input("Grams per unit", min_value=1.0, value=1.0)
+        # --- Автозаповнення нутрієнтів для advanced editor
+        calories = st.number_input("Calories per 100g", value=0.0)
+        protein = st.number_input("Protein per 100g", value=0.0)
+        fat = st.number_input("Fat per 100g", value=0.0)
+        carbs = st.number_input("Carbs per 100g", value=0.0)
+        if USDA_KEY and st.button("🔍 Автозаповнити нутрієнти через USDA"):
+            usda = search_usda_nutrition(USDA_KEY, name)
+            if usda:
+                st.success(f"USDA: Calories: {usda['calories']} / Prot: {usda['protein']} / Fat: {usda['fat']} / Carbs: {usda['carbs']}")
+                calories, protein, fat, carbs = usda["calories"], usda["protein"], usda["fat"], usda["carbs"]
+            else:
+                st.warning("Не знайдено нутрієнтів у USDA.")
+        if st.button("Save Ingredient (edit)"):
+            ingredients[name] = {
+                "price": price,
+                "weight": weight,
+                "unit": unit,
+                "weight_per_unit": weight_per_unit,
+                "calories": calories,
+                "protein": protein,
+                "fat": fat,
+                "carbs": carbs,
+                "updated": str(datetime.now())
+            }
+            save_json(INGREDIENTS_FILE, ingredients)
+            st.success(f"Saved: {name}")
