@@ -1,36 +1,20 @@
-# meal_cost_analyzer: Streamlit MVP — with public recipe base + full USDA autofill
-
 import streamlit as st
 import json
 import os
-import requests
 from datetime import datetime
+from spoonacular_api import get_recipe
 
+SPOONACULAR_KEY = st.secrets["spoonacular_key"]
 INGREDIENTS_FILE = "ingredients_db.json"
 RECIPES_FILE = "recipes_db.json"
-USDA_API_KEY = st.secrets["usda_api_key"] if "usda_api_key" in st.secrets else "YOUR_API_KEY_HERE"
 
-# Public recipe demo (can be replaced by actual API)
-PUBLIC_RECIPES = {
-    "Omelette": {
-        "ingredients": {"Egg": 2, "Milk": 50, "Butter": 10}, "servings": 1
-    },
-    "Banana Smoothie": {
-        "ingredients": {"Banana": 1, "Milk": 200, "Honey": 10}, "servings": 1
-    },
-    "Potato Soup": {
-        "ingredients": {"Potato": 300, "Onion": 50, "Butter": 20, "Salt": 5}, "servings": 2
-    }
-}
-
-# Initialize DB files if they don't exist
 def init_db():
     if not os.path.exists(INGREDIENTS_FILE):
         with open(INGREDIENTS_FILE, "w") as f:
             json.dump({}, f)
     if not os.path.exists(RECIPES_FILE):
         with open(RECIPES_FILE, "w") as f:
-            json.dump(PUBLIC_RECIPES, f)
+            json.dump({}, f)
 
 def load_json(file):
     with open(file, "r") as f:
@@ -40,98 +24,80 @@ def save_json(file, data):
     with open(file, "w") as f:
         json.dump(data, f, indent=2)
 
-# Search nutrition from USDA
-@st.cache_data(show_spinner=False)
-def search_usda(query):
-    url = f"https://api.nal.usda.gov/fdc/v1/foods/search?query={query}&pageSize=1&api_key={USDA_API_KEY}"
-    try:
-        res = requests.get(url)
-        item = res.json()["foods"][0]
-        nutrients = {n["nutrientName"]: n["value"] for n in item["foodNutrients"]}
-        return {
-            "calories": nutrients.get("Energy", 0),
-            "protein": nutrients.get("Protein", 0),
-            "fat": nutrients.get("Total lipid (fat)", 0),
-            "carbs": nutrients.get("Carbohydrate, by difference", 0)
-        }
-    except:
-        return {"calories": 0, "protein": 0, "fat": 0, "carbs": 0}
-
 init_db()
 ingredients = load_json(INGREDIENTS_FILE)
 recipes = load_json(RECIPES_FILE)
 
-st.title("🍲 Meal Cost & Nutrition Analyzer")
-st.write("Analyze real meals by price, calories, protein, carbs and fats")
+st.title("🍲 Meal Cost & Nutrition Analyzer (Spoonacular)")
+st.write("Шукай рецепти онлайн, підтягуй інгредієнти й оцінюй їхню ціну та поживність!")
 
-# Select recipe first
-st.header("1. 🍛 Select Recipe")
-selected_recipe = st.selectbox("Choose recipe", list(recipes.keys()))
+# --- 1. Імпорт рецепту зі Spoonacular
+st.header("1. 📥 Імпорт рецепту з публічної бази")
+query = st.text_input("Введи назву страви для пошуку (англійською):")
+if st.button("Знайти та імпортувати рецепт") and query:
+    rec = get_recipe(SPOONACULAR_KEY, query)
+    if rec:
+        # Додаємо рецепт до локальної БД
+        recipes[rec["title"]] = {
+            "ingredients": {k: v["qty"] for k,v in rec["ingredients"].items()},
+            "units": {k: v["unit"] for k,v in rec["ingredients"].items()},
+            "servings": rec["servings"]
+        }
+        save_json(RECIPES_FILE, recipes)
+        st.success(f"Рецепт '{rec['title']}' додано!")
+    else:
+        st.warning("Рецепт не знайдено.")
 
+# --- 2. Вибір рецепту для аналізу
+st.header("2. 🍛 Аналіз рецепту")
+selected_recipe = st.selectbox("Оберіть рецепт", list(recipes.keys()))
 if selected_recipe:
-    recipe_data = recipes[selected_recipe]
-    servings = recipe_data["servings"]
-    st.markdown(f"**Servings:** {servings}")
+    rec = recipes[selected_recipe]
+    servings = rec["servings"]
+    ingr_table = []
+    total_cost = total_cals = total_prot = total_fat = total_carb = 0.0
 
-    # Show ingredient table and update/add missing ones
-    st.subheader("📦 Ingredients")
-    total_cost = 0.0
-    total_cals = 0.0
-    total_prot = 0.0
-    total_fat = 0.0
-    total_carb = 0.0
-
-    for ingr, qty in recipe_data["ingredients"].items():
-        if ingr not in ingredients or not all(k in ingredients[ingr] for k in ["unit", "weight_per_unit"]):
-            # Auto-fetch from USDA if missing or incomplete
-            usda = search_usda(ingr)
+    for ingr, qty in rec["ingredients"].items():
+        # unit
+        unit = rec.get("units", {}).get(ingr, "g")
+        # Check if in local ingredient DB
+        if ingr not in ingredients:
+            price = st.number_input(f"Ціна {ingr} ({unit}, за пакування):", min_value=0.0, key=f"price_{ingr}")
+            weight = st.number_input(f"Вага пакування {ingr} ({unit}):", min_value=1.0, key=f"weight_{ingr}")
+            # Додаємо пусті нутрієнти для майбутнього автоматичного/ручного заповнення
             ingredients[ingr] = {
-                "price": 0.0,
-                "weight": 100,
-                "unit": "g",
-                "weight_per_unit": 1,
-                "calories": usda["calories"],
-                "protein": usda["protein"],
-                "fat": usda["fat"],
-                "carbs": usda["carbs"],
+                "price": price, "weight": weight,
+                "unit": unit, "weight_per_unit": 1,
+                "calories": 0, "protein": 0, "fat": 0, "carbs": 0,
                 "updated": str(datetime.now())
             }
             save_json(INGREDIENTS_FILE, ingredients)
+        else:
+            price = ingredients[ingr]["price"]
+            weight = ingredients[ingr]["weight"]
 
-        i = ingredients[ingr]
-        unit = i.get("unit", "g")
-        unit_weight = i.get("weight_per_unit", 1) if unit != "g" else 1
-        qty_in_grams = qty * unit_weight
-        price_per_g = i.get("price", 0.0) / (i.get("weight", 1) * unit_weight if unit != "g" else i.get("weight", 1))
-        total_cost += price_per_g * qty_in_grams
-        total_cals += (i.get("calories", 0) / 100) * qty_in_grams
-        total_prot += (i.get("protein", 0) / 100) * qty_in_grams
-        total_fat += (i.get("fat", 0) / 100) * qty_in_grams
-        total_carb += (i.get("carbs", 0) / 100) * qty_in_grams
+        price_per_g = price / weight if weight else 0
+        cost = price_per_g * qty
+        total_cost += cost
+        ingr_table.append(f"{ingr}: {qty} {unit}, вартість: CAD {cost:.2f}")
 
-        st.write(f"{ingr}: {qty} {unit} — CAD {price_per_g * qty_in_grams:.2f}, {i.get('calories', 0)} kcal/100g")
+    st.subheader("Інгредієнти та вартість (без нутрієнтів):")
+    st.write("\n".join(ingr_table))
+    st.write(f"Вартість однієї порції: **CAD {total_cost/servings:.2f}**")
 
-    st.subheader("📊 Analysis — per serving")
-    st.write(f"**Cost:** CAD {total_cost/servings:.2f}")
-    st.write(f"**Calories:** {total_cals/servings:.0f} kcal")
-    st.write(f"**Protein:** {total_prot/servings:.1f} g")
-    st.write(f"**Fat:** {total_fat/servings:.1f} g")
-    st.write(f"**Carbs:** {total_carb/servings:.1f} g")
-
-# Admin section to add/update manually
-with st.expander("⚙️ Add or Edit Ingredient"):
-    name = st.text_input("Ingredient name")
+# --- 3. Редагування інгредієнтів, нутрієнти
+with st.expander("⚙️ Додати/Редагувати інгредієнти та нутрієнти"):
+    name = st.text_input("Інгредієнт")
     if name:
-        usda = search_usda(name)
         price = st.number_input("Price (CAD)", min_value=0.0)
-        weight = st.number_input("Weight (in unit)", min_value=1, value=100)
+        weight = st.number_input("Weight (in unit)", min_value=1.0)
         unit = st.selectbox("Unit", ["g", "ml", "pcs", "tbsp", "slice"])
-        weight_per_unit = st.number_input("Grams per unit", min_value=1, value=1)
-        calories = st.number_input("Calories per 100g", value=usda["calories"])
-        protein = st.number_input("Protein per 100g", value=usda["protein"])
-        fat = st.number_input("Fat per 100g", value=usda["fat"])
-        carbs = st.number_input("Carbs per 100g", value=usda["carbs"])
-        if st.button("Save Ingredient"):
+        weight_per_unit = st.number_input("Grams per unit", min_value=1.0, value=1.0)
+        calories = st.number_input("Calories per 100g", value=0.0)
+        protein = st.number_input("Protein per 100g", value=0.0)
+        fat = st.number_input("Fat per 100g", value=0.0)
+        carbs = st.number_input("Carbs per 100g", value=0.0)
+        if st.button("Save Ingredient (edit)"):
             ingredients[name] = {
                 "price": price,
                 "weight": weight,
@@ -145,3 +111,4 @@ with st.expander("⚙️ Add or Edit Ingredient"):
             }
             save_json(INGREDIENTS_FILE, ingredients)
             st.success(f"Saved: {name}")
+
