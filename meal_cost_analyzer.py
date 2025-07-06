@@ -2,49 +2,55 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
-from datetime import datetime
+import io
 
-# --- CONFIG
+# --- Налаштування
 USDA_KEY = st.secrets.get("usda_api_key")
-PCLOUD_JSON_URL = st.secrets.get("pcloud_prices_url")  # https://link_to_public_json_file
-PCLOUD_JSON_WRITE = st.secrets.get("pcloud_prices_write_url")  # POST url if є API (або залиш пустим і тоді ручне оновлення)
+PCLOUD_RECIPES_URL = st.secrets.get("pcloud_recipes_url")   # CSV recipes
+PCLOUD_PRICES_URL = st.secrets.get("pcloud_prices_url")     # JSON prices
+PCLOUD_PRICES_WRITE = st.secrets.get("pcloud_prices_write_url")  # Якщо є POST url для збереження, або залишити порожнім
 
-# --- LOAD DATA
+# --- Завантаження рецептів з pCloud (CSV)
 @st.cache_data
 def load_recipes():
-    # Структура: id, name, ingredients (json), instructions
-    return pd.read_csv("open_recipes_db.csv")
+    # Пряме читання CSV через requests+io для абсолютної стабільності!
+    r = requests.get(PCLOUD_RECIPES_URL)
+    r.raise_for_status()
+    return pd.read_csv(io.StringIO(r.content.decode()))
 
+# --- Завантаження цін з pCloud (JSON)
 @st.cache_data
 def load_prices():
     try:
-        r = requests.get(PCLOUD_JSON_URL)
+        r = requests.get(PCLOUD_PRICES_URL)
+        r.raise_for_status()
         return r.json()
     except Exception:
         return {}
 
+# --- Збереження цін (автоматично через POST або ручний JSON)
 def save_prices(prices):
-    # Зберігаємо файл назад у pCloud (якщо публічний upload/post-URL; якщо нема — показуємо готовий json для ручного копіювання)
-    if PCLOUD_JSON_WRITE:
-        requests.post(PCLOUD_JSON_WRITE, json=prices)
+    if PCLOUD_PRICES_WRITE:
+        resp = requests.post(PCLOUD_PRICES_WRITE, json=prices)
+        if resp.status_code == 200:
+            st.success("Ціни збережені у pCloud!")
+        else:
+            st.error(f"Помилка запису ({resp.status_code})")
     else:
-        st.warning("Автоматичне збереження недоступне: встав цей JSON вручну у свій pCloud")
+        st.warning("Автоматичне збереження недоступне. Скопіюй цей JSON вручну у свій pCloud:")
         st.code(json.dumps(prices, indent=2))
 
-recipes = load_recipes()
-prices = load_prices()
-
-# --- USDA API
+# --- Поживність з USDA
 @st.cache_data(show_spinner=False)
 def get_nutrition(query):
     if not USDA_KEY:
         return {}
-    url = f"https://api.nal.usda.gov/fdc/v1/foods/search"
+    url = "https://api.nal.usda.gov/fdc/v1/foods/search"
     params = {"api_key": USDA_KEY, "query": query, "pageSize": 1}
     try:
         r = requests.get(url, params=params)
         food = r.json()["foods"][0]
-        n = {n["nutrientName"]: n["value"] for n in food["foodNutrients"]}
+        n = {n["nutrientName"]: n["value"] for n in food.get("foodNutrients", [])}
         return {
             "calories": n.get("Energy", 0),
             "protein": n.get("Protein", 0),
@@ -56,15 +62,21 @@ def get_nutrition(query):
 
 # --- 1. Пошук рецепту
 st.title("🍲 Simple Meal Cost & Nutrition Analyzer")
+recipes = load_recipes()
+prices = load_prices()
+
 search_term = st.text_input("Пошук рецепту (англійською):")
-search_results = recipes[recipes["name"].str.contains(search_term, case=False)] if search_term else recipes.head(10)
+if search_term:
+    search_results = recipes[recipes["name"].str.contains(search_term, case=False, na=False)]
+else:
+    search_results = recipes.head(10)
 
 # --- 2. Вибір рецепту
-recipe_id = st.selectbox("Вибери рецепт:", search_results["name"].tolist())
-recipe = search_results[search_results["name"] == recipe_id].iloc[0] if recipe_id else None
+recipe_name = st.selectbox("Вибери рецепт:", search_results["name"].tolist())
+recipe = search_results[search_results["name"] == recipe_name].iloc[0] if recipe_name else None
 
 if recipe is not None:
-    ingr_list = json.loads(recipe["ingredients"])  # [{'name': ..., 'amount': ..., 'unit': ...}, ...]
+    ingr_list = json.loads(recipe["ingredients"])
     servings = int(recipe.get("servings", 1))
     st.markdown(f"**{recipe['name']}** — {servings} servings")
     st.markdown(recipe["instructions"])
@@ -73,16 +85,10 @@ if recipe is not None:
     st.header("Інгредієнти та ціни")
     updated = False
     new_prices = prices.copy()
-    cols = st.columns([4, 2, 2, 2, 2, 2])
-    cols[0].markdown("**Інгредієнт**")
-    cols[1].markdown("**Кількість**")
-    cols[2].markdown("**Одиниця**")
-    cols[3].markdown("**Ціна/1 кг або пачку (CAD)**")
-    cols[4].markdown("**Вага (г/шт/мл)**")
-    cols[5].markdown("**Вартість (CAD)**")
+    table = []
     total_cost = 0.0
+    ingr_cals, ingr_prot, ingr_fat, ingr_carb = [], [], [], []
 
-    ingr_costs, ingr_cals, ingr_prot, ingr_fat, ingr_carb = [], [], [], [], [], []
     for ingr in ingr_list:
         name = ingr["name"]
         amt = float(ingr.get("amount", 0))
@@ -90,10 +96,14 @@ if recipe is not None:
 
         ingr_price = float(prices.get(name, {}).get("price", 0))
         ingr_weight = float(prices.get(name, {}).get("weight", 100))
-        # Ввід ціни, якщо відсутня
+        # Ввід ціни, якщо відсутня або можна оновити
+        cols = st.columns([4, 2, 2, 2, 2, 2])
+        cols[0].write(name)
+        cols[1].write(amt)
+        cols[2].write(unit)
         price_val = cols[3].number_input(f"{name}_price", value=ingr_price, min_value=0.0, key=f"p_{name}")
         weight_val = cols[4].number_input(f"{name}_weight", value=ingr_weight, min_value=1.0, key=f"w_{name}")
-        # Користувач зберігає нові ціни
+
         if price_val != ingr_price or weight_val != ingr_weight:
             new_prices[name] = {"price": price_val, "weight": weight_val}
             updated = True
@@ -102,10 +112,9 @@ if recipe is not None:
         if unit in ["g", "ml"]:
             price_per_g = price_val / weight_val if weight_val else 0
             cost = price_per_g * amt
-        else:  # наприклад "pcs" — вартість за штуку
+        else:  # "pcs", "tbsp", ...
             cost = price_val * amt / weight_val if weight_val else 0
         total_cost += cost
-        ingr_costs.append(cost)
 
         # Поживність
         nutr = get_nutrition(name)
@@ -114,11 +123,8 @@ if recipe is not None:
         ingr_fat.append(nutr.get("fat", 0) * amt / 100 if unit in ["g", "ml"] else nutr.get("fat", 0) * amt)
         ingr_carb.append(nutr.get("carbs", 0) * amt / 100 if unit in ["g", "ml"] else nutr.get("carbs", 0) * amt)
 
-        # Показ рядок
-        cols[0].write(name)
-        cols[1].write(amt)
-        cols[2].write(unit)
         cols[5].write(f"{cost:.2f}")
+        table.append([name, amt, unit, price_val, weight_val, cost])
 
     # --- Зберегти нові ціни у хмару, якщо треба
     if updated and st.button("💾 Зберегти ціни у pCloud"):
